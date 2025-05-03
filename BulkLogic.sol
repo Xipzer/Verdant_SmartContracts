@@ -48,6 +48,8 @@ interface IStorageCore {
 
     function getAllPlayerMiners(address _player) external view returns (uint256[] memory);
     function getAllPlayerItems(address _player) external view returns (uint256[] memory);
+    function getAllPlayerGiftMiners(address _player) external view returns (uint256[] memory);
+    function getAllPlayerGiftItems(address _player) external view returns (uint256[] memory);
     function miners(uint256 _minerId) external view returns (Miner memory);
     function minerTypes(uint8 _typeId) external view returns (MinerType memory);
     function giftMiners(uint256 _giftMinerId) external view returns (GiftMiner memory);
@@ -67,8 +69,8 @@ interface IStorageCore {
 }
 
 interface IMinerLogic {
-    function calculateMinerBloomCost(uint256 _minerType) external view returns (uint256);
-    function calculateRewardsRate(uint256 _minerType, uint256 _bloomCost) external view returns (uint256);
+    function calculateMinerBloomCost(uint8 _minerType) external view returns (uint256);
+    function calculateRewardsRate(uint8 _minerType, uint256 _bloomCost) external view returns (uint256);
     function calculateMaintenanceCost(uint256 _dailyRewards) external view returns (uint256);
     function calculateAvailableSlots(address _player, uint8 _rarity) external view returns (uint8);
     function calculateMinerLives(IStorageCore.Miner memory _miner) external view returns (uint8);
@@ -182,14 +184,14 @@ contract BulkLogic is Ownable {
         uint256 deadline = _miner.lastMaintenance + maintenanceWindow;
 
         if (block.timestamp > deadline) {
-            uint256 missedWindows = (block.timestamp - _miner.lastMaintenance) / MAINTENANCE_WINDOW;
+            uint256 missedWindows = (block.timestamp - _miner.lastMaintenance) / maintenanceWindow;
             if (missedWindows >= _miner.lives) {
                 storageCore.updateMinerLives(_minerId, 0);
                 emit MinerDestroyed(msg.sender, _minerId);
             } else {
                 uint8 newLives = _miner.lives - uint8(missedWindows);
                 storageCore.updateMinerLives(_minerId, newLives);
-                storageCore.updateMinerLastMaintenance(_minerId, uint64(_miner.lastMaintenance + (missedWindows * MAINTENANCE_WINDOW)));
+                storageCore.updateMinerLastMaintenance(_minerId, uint64(_miner.lastMaintenance + (missedWindows * maintenanceWindow)));
             }
         }
     }
@@ -200,6 +202,9 @@ contract BulkLogic is Ownable {
      * @return Array of success/failure results for each claim
      */
     function claimGiftMiners(uint256[] calldata _giftMinerIds) public returns (bool[] memory) {
+        uint256[] memory playerGiftMiners = storageCore.getAllPlayerGiftMiners(msg.sender);
+        require(_giftMinerIds.length <= playerGiftMiners.length, "Too many gift miners");
+        
         bool[] memory results = new bool[](_giftMinerIds.length);
         
         uint8[] memory rarities = new uint8[](_giftMinerIds.length);
@@ -240,6 +245,9 @@ contract BulkLogic is Ownable {
      * @return Array of success/failure results for each claim
      */
     function claimGiftItems(uint256[] calldata _giftItemIds) public returns (bool[] memory) {
+        uint256[] memory playerGiftItems = storageCore.getAllPlayerGiftItems(msg.sender);
+        require(_giftItemIds.length <= playerGiftItems.length, "Too many gift items");
+        
         bool[] memory results = new bool[](_giftItemIds.length);
         
         uint256[] memory itemTypes = new uint256[](_giftItemIds.length);
@@ -293,6 +301,9 @@ contract BulkLogic is Ownable {
      * @return Array of success/failure results for each maintenance
      */
     function maintainMiners(uint256[] calldata _minerIds) external returns (bool[] memory) {
+        uint256[] memory playerMiners = storageCore.getAllPlayerMiners(msg.sender);
+        require(_minerIds.length <= playerMiners.length, "Too many miners");
+        
         bool[] memory results = new bool[](_minerIds.length);
         
         for (uint256 i = 0; i < _minerIds.length; i++) {
@@ -303,6 +314,8 @@ contract BulkLogic is Ownable {
                 results[i] = false;
                 continue;
             }
+
+            updateMinerState(miner, _minerIds[i]);
             
             uint256 bloomCost = minerLogic.calculateMinerBloomCost(miner.minerType);
             uint256 rewardsRate = minerLogic.calculateRewardsRate(miner.minerType, bloomCost);
@@ -311,8 +324,7 @@ contract BulkLogic is Ownable {
             uint256 maintenanceCost = (baseCost * timeElapsed) / MAINTENANCE_WINDOW;
 
             if (storageCore.bloomBalances(msg.sender) < maintenanceCost) {
-                results[i] = false;
-                continue;
+                break;
             }
             
             storageCore.updateBloomBalance(msg.sender, maintenanceCost, false);
@@ -329,6 +341,9 @@ contract BulkLogic is Ownable {
      * @return Total rewards claimed and array of success/failure results
      */
     function claimRewards(uint256[] calldata _minerIds) external returns (uint256, bool[] memory) {
+        uint256[] memory playerMiners = storageCore.getAllPlayerMiners(msg.sender);
+        require(_minerIds.length <= playerMiners.length, "Too many miners");
+        
         bool[] memory results = new bool[](_minerIds.length);
         uint256 totalRewards = 0;
         
